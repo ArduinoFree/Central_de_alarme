@@ -1,0 +1,206 @@
+/*
+ * Projeto: Central de Alarme v1.1
+ * Nome: Guilherme Spadaccia 
+ * Data: 20/02/2014
+ * Utilizados fontes de: PAUL BADGER, 2008 e JACQUES DANIEL MORESCO, 2012
+ * Fonte criado para ser utilizado com o Arduino Uno R3 para montagem de uma central de alarme.
+ */
+
+//variaveis usadas no leitor de RF criadas por JACQUES DANIEL MORESCO
+int x,startbit,ctr,dataok,t1,larpulso,larpulso1,larpulso2,larpulso3,larpulso4,bt1,bt2,antcode=0;
+unsigned long _data=0;   // DATA é o Código recebio do HT6p20 todos os 28 BITS onde, 22 do coodigo + 2 dos botões + 4 do anti-codigo;
+unsigned long _dur,_dur1; // Duração do Pulso
+unsigned long bkpTempo1; //variavel de controle do do dalay
+unsigned long bkpTempo2; //variavel de controle do do dalay
+byte _pin = 10; // Pino que vai receber o sinal RF digital.
+byte _compar1[] = {1,0,1,0,1,1,1,1,1,1,1,0,0,1,0,1,0,1,0,1,0,1,0,1,1,0,0,1,0}; //sequencia de bits lidos do dispositivo sem fio
+byte _compar2[] = {1,0,1,0,1,1,0,1,0,0,1,1,0,0,0,1,1,1,0,1,1,0,0,1,0,1,0,1,0}; //sequencia de bits lidos do dispositivo sem fio
+boolean ret = false;
+int botao1 = 3;  //botão que ativa o alarme
+int botao2 = 4; //botão que ativa o alarme
+boolean stat = false;
+int numMax = 0;
+long intervalo1 = 10000; //intervalo do delay 1
+long intervalo2 = 5000; //intervalo do delay 2
+
+//-----------------------------
+//Função de inicialização
+//-----------------------------
+void setup()                    
+{
+  pinMode(botao1, INPUT); //pino de entrada do botão de ativação do alarme
+  //digitalWrite(botao1,LOW);//define o pino como low
+  pinMode(botao2, INPUT); //pino de entrada do btão de desativação do alarme
+  //digitalWrite(botao2,LOW);
+//  _pin=10; //pino responsável pela leitura da RF
+  pinMode(_pin, INPUT);//define o pino que lerá a RF
+  Serial.begin(9600); // define o rating de comunicação com a porta USB
+  pinMode(13, OUTPUT); //LED que representa a leitura dos bits de RF
+  digitalWrite(13,LOW);
+  pinMode(12,OUTPUT); //porta que controla a ativação do rele
+}
+
+//-----------------------------
+//Função de repetição
+//-----------------------------
+void loop()                    
+{
+  if (LeTeclado()){ //Estado 1 - aguarda ativação do alarme pelo teclado. TODO - aqui podemos implementar ativação por controle remoto
+    if(millis()-bkpTempo1 > intervalo1){ //caso haja leitura positiva do teclado adiciona um delay para iniciar a leitura da RF assim o usuário poderá sair de casa sem ativar o alarme
+        if (LeSensor()){ // Estado 2 - aguarda uma leitura positiva da RF
+          if(millis()-bkpTempo2 > intervalo2){ //caso a leitura seja positiva adiciona um delay para dar tempo do usuário desativar o alarme
+            digitalWrite(12,HIGH);//caso a leitura da RF seja positiva ativa o alarme
+          }
+        }
+    }
+  }
+}
+  
+//--------------------------------------------------------------------
+//Função responsável por ler o teclado de ativação/desativação
+//--------------------------------------------------------------------
+boolean LeTeclado(){
+  if (!stat){  //verificação do estado 1 para 2 - Ativação do alarme
+    if(digitalRead(botao1) == HIGH){//caso o botão de ativação seja pressionado da um toque rápido na sirene para sinalizar ao usuário a ativação
+      digitalWrite(12,HIGH);
+      delay(200);
+      digitalWrite(12,LOW);
+      stat = true; //altera a variavel de estado para o estado 2
+      ret = false;
+      bkpTempo1 = millis(); //faz um backup da função millis
+    }
+  }else{ //verificação do estado 2 para  1 - Desativação do alarme
+    if(digitalRead(botao2) == HIGH){//caso o botão de desativação seja pressionado da dois toque rápido na sirene para sinalizar ao usuário a desativação
+      digitalWrite(12,LOW);
+      delay(200);
+      digitalWrite(12,HIGH);
+      delay(200);
+      digitalWrite(12,LOW);
+      delay(200);
+      digitalWrite(12,HIGH);
+      delay(200);
+      digitalWrite(12,LOW);
+      stat = false;
+      ret = true;
+    } 
+  }
+  return(stat); //retorna o estado
+}
+
+//----------------------------------------------------------
+//Função responsável por ler os sensores sem fio
+//Função adaptada do fonte do JACQUES DANIEL MORESCO
+//----------------------------------------------------------
+boolean LeSensor(){
+  byte bytes;
+  char myChar;
+  if (!ret){ 
+ digitalWrite(13, digitalRead(_pin)); //Pisca o LED conforme o valor da entrada digital, testar interferencias.
+  if (startbit==0)
+  {// Testa o tempo piloto até o Bit de inicio;
+    _dur = pulseIn(_pin, LOW);
+    if(_dur > 8000 && _dur < 12000 && startbit==0)
+    {
+      larpulso=_dur/23;
+      larpulso1=larpulso-50;
+      larpulso2=larpulso+50;
+      larpulso3=larpulso+larpulso-50;
+      larpulso4=larpulso+larpulso+50;
+      startbit=1;
+
+      _dur=0;
+      _data=0;
+      dataok=0;
+      ctr=0;
+    }
+  }
+
+  // Se o Bit de inicio OK ENTÃO Inicia a medição do tempo em Nivel ALTO dos sinais, e testa se o tempo está na faixa.
+  if (startbit==1 && dataok==0 && ctr < 28)
+  {
+    ++ctr;
+    _dur1 = pulseIn(_pin, HIGH);
+    if(_dur1 > larpulso1 && _dur1 < larpulso2)     // Se a largura de pulso é entre 1/4000 e 1/3000 segundos
+    {
+      _data = (_data << 1) + 1;      // anexar um * 1 * para a extremidade mais à direita do buffer
+    }
+    else if(_dur1 > larpulso3 && _dur1 < larpulso4)   // Se a largura de pulso é entre 2/4000 e 2/3000 segundos
+    {
+      _data = (_data << 1);       // anexar um * 0 * para a extremidade mais à direita do buffer
+    }
+    else
+    {
+      /* força finalização do laço */
+      startbit=0;
+    }
+  }
+  if (ctr==28)
+  { 
+    if (bitRead(_data,0)==1)
+    { 
+      if (bitRead(_data,1)==0)
+      {
+        if (bitRead(_data,2)==1)
+        {
+          if (bitRead(_data,3)==0)
+          {
+            antcode=1;
+          }
+        }
+      }
+    }    
+
+    if (antcode==1)
+    {// Se foram recebidos todos os 28 Bits, o valor vai para a variavel _data e pode ser usada como exemplo abaixo.
+      dataok=1;
+      Serial.println(_data,BIN);
+      
+      //Este código comentado le o código de um sensor
+      //o retorno desse fonte gera o array utiliazdo nas variaveis _compar1[] e _compar2[]
+      //TODO - Tentar automatizar esse processo para facilitar o cadasro de novos dispositivos sem fio
+      /*for(int i=0; i<29;i++){
+        if (bitRead(_data,i) == _compar1[i]){
+          Serial.print(bitRead(_data,i),BIN);
+          Serial.print(" - ");
+          Serial.println(_compar1[i],BIN);
+        }else{
+          Serial.print(bitRead(_data,i),BIN);
+          Serial.print(" - ");
+          Serial.println(_compar1[i],BIN);
+        }
+      }*/
+      
+      //Faz a comparação dos bits lidos com os bits registrados no sistema
+      //TODO - Criar uma função genérica que lê uma matriz onde cada vetor dela seja um dispositivo sem fio
+      //     - vincular o array citado acima com a leitura dos bits para inclusão de um novo dispositivo
+      for(int i=0; i<29;i++){
+        if (bitRead(_data,i) == _compar1[i]){
+          ret = true;
+        }else{
+          ret = false;
+          break;
+        }
+      }
+      if(!ret){
+        for(int i=0; i<29;i++){
+          if (bitRead(_data,i) == _compar2[i]){
+            ret = true;
+          }else{
+            ret = false;
+            break;
+          }
+        }
+      }
+      if(ret){
+        bkpTempo2 = millis();//função de backup do tempo
+      }
+      //limpa algumas variaveis
+      ctr=0;
+      startbit=0;
+      antcode=0;
+      delay(100);
+    }
+  } 
+  }
+  return(ret);
+}
