@@ -8,69 +8,97 @@
  * Utilizados fontes de: PAUL BADGER, 2008; JACQUES DANIEL MORESCO, 2012; David A. Mellis, 2009; 
  * Fonte criado para ser utilizado com o Arduino Uno R3 para montagem de uma central de alarme.
  */
-
+//-----------------------------------
 //variaveis usadas no leitor de RF
+//-----------------------------------
 int x,startbit,ctr,dataok,t1,larpulso,larpulso1,larpulso2,larpulso3,larpulso4,bt1,bt2,antcode=0;
-unsigned long _data=0;   // DATA é o Código recebio do HT6p20 todos os 28 BITS onde, 22 do coodigo+2 dos botões+4 do anti-codigo;
-unsigned long _dur,_dur1;      // Duração do Pulso
-unsigned long bkpTempo1;
-unsigned long bkpTempo2;
-byte          _pin;    // Pino que vai receber o sinal RF digital.
-byte _compar1[] = {1,0,1,0,1,1,1,1,1,1,1,0,0,1,0,1,0,1,0,1,0,1,0,1,1,0,0,1,0};
-byte _compar2[] = {1,0,1,0,1,1,0,1,0,0,1,1,0,0,0,1,1,1,0,1,1,0,0,1,0,1,0,1,0};
-boolean ret = false;
-int botao1 = 3;  
-int botao2 = 4;
-boolean stat = false;
+unsigned long _data=0; // DATA é o Código recebio do HT6p20 todos os 28 BITS onde, 22 do coodigo+2 dos botões+4 do anti-codigo;
+unsigned long _dur,_dur1; // Duração do Pulso
+unsigned long bkpTempo1; //backup de tempo 1 (depois da ativação)
+unsigned long bkpTempo2; //backup de tempo 2 (depois de lido o sensor)
+byte _pin;    // Pino que vai receber o sinal RF digital.
+byte _compar1[] = {1,0,1,0,1,1,1,1,1,1,1,0,0,1,0,1,0,1,0,1,0,1,0,1,1,0,0,1,0}; //bits de comparação do sensor de porta 1
+byte _compar2[] = {1,0,1,0,1,1,0,1,0,0,1,1,0,0,0,1,1,1,0,1,1,0,0,1,0,1,0,1,0}; //bits de comparação do sensor de porta 2
+//-----------------------------------
+//variaveis de controle do alarme
+//-----------------------------------
 int numMax = 0;
+int botao1 = 6; //botão para ativação do alarme
+int botao2 = 7; //botão para desativação do alarme
+int rele   = 9; //saida do rele que liga a sirene
+boolean ret = false; //retorno das funções de leitura dos botões e da RF
+boolean stat = false; //variavel de controle de estado 
 //long intervalo1 = 60000;
-long intervalo1 = 10000;
-long intervalo2 = 5000;
-int rele = 9;
+long intervalo1 = 10000;//dalay 1 (depois da ativação)
+long intervalo2 = 5000;//dalay 2 (depois de lido o sensor)
+//--------------------
 //Ethernet Shield
-byte mac[] = { 
-  0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
-IPAddress ip(192,168,0, 8);
-EthernetServer server(80);
+//--------------------
+byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };//numero do MAC Adress
+IPAddress ip(192,168,0, 8);//endereço de IP
+EthernetServer server(80);//porta de listening
 EthernetClient client;
+boolean login = false;//variavel que define se o cliente está logado
+boolean leSensor = false;
+boolean aguardando = false;//indica que o sistema esta aguardando para ativar o alarme ou tocar a sirene. Tempo de delay
 
-
+//-----------------------------------------------------
+//Inicialização das portas e algumas variaveis
+//-----------------------------------------------------
 void setup()                    
 {
   pinMode(botao1, INPUT);
   digitalWrite(botao1,LOW);
   pinMode(botao2, INPUT);
   digitalWrite(botao2,LOW);
-  _pin=8;
+  _pin=8;//seta o pino 8 como leitura da RF
   Serial.begin(9600);
   pinMode(_pin, INPUT);
   pinMode(13, OUTPUT);
   pinMode(rele,OUTPUT);
   digitalWrite(13,LOW);
-  // start the Ethernet connection and the server:
+  // Inicia a conexão da EthernetShield
   Ethernet.begin(mac, ip);
   server.begin();
   Serial.print("server is at ");
   Serial.println(Ethernet.localIP());
 }
 
+//-----------------------------------------------------
+//Função de repetição responsavel por organizar todos os
+//do sistema.
+//-----------------------------------------------------
 void loop()                    
 {
+  //-----------------------------------
+  //Estado 1 - aguardando ativação
+  //-----------------------------------
   client = server.available();
-  LeTeclado();
-  LeWebServer();
-  if (stat){
+  LeTeclado();//lê se houve ativação do alarme pelo teclado
+  LeWebServer();//ve se houve ativação do alarme pela página
+  if (stat){//se o status estiver como true, significa que o sistema está no estado 2
     if(millis()-bkpTempo1 > intervalo1){
-        if (LeSensor()){
+        //-------------------------------------------------
+        //Estado 2 - aguardando leitura RF ou desativação
+        //-------------------------------------------------
+        if (LeSensor()){//função que faz a leitura da RF
+          aguardando = true;
           if(millis()-bkpTempo2 > intervalo2){
-            digitalWrite(rele,HIGH);
+            //--------------------------------------------------------------------
+            //Estado 3 - Sirene ativada informa ao cliente (TODO) e aguarda desativação
+            //--------------------------------------------------------------------
+            aguardando = false;
+            digitalWrite(rele,HIGH);//ativa o rele da sirene
           }
         }
     }
   }
 }
 
-boolean LeWebServer(){
+//-----------------------------------------------------
+//Função responsável pela criação e leitura da página HTML
+//-----------------------------------------------------
+boolean LeWebServer(){ 
  if (client) {
     Serial.println("new client");
     // an http request ends with a blank line
@@ -81,31 +109,55 @@ boolean LeWebServer(){
       if (client.available()) {
         char c = client.read();
         buffer += c;
-        //Serial.write(c);
-        // if you've gotten to the end of the line (received a newline
-        // character) and the line is blank, the http request has ended,
-        // so you can send a reply
+        
         if (c == '\n' && currentLineIsBlank) {
-          // send a standard http response header
+          // cabeçalho do HTML
           client.println("HTTP/1.1 200 OK");
           client.println("Content-Type: text/html");
           client.println("Connnection: close");
           client.println();
           client.println("<!DOCTYPE HTML>");
           client.println("<html>");
-                    // add a meta refresh tag, so the browser pulls again every 5 seconds:
-          client.println("<meta http-equiv=\"refresh\" content=\"5; http://192.168.0.8/\">");
-          // output the value of each analog input pin
-          
+          //Adiciona uma tag de Refresh a página 
+          if(login){
+            //após logado: Refresh de 5 segundos
+            client.println("<meta http-equiv=\"refresh\" content=\"5; http://192.168.0.8/\">");
+          }else{
+            //na tela de login: Refresh de 300 segundos
+            client.println("<meta http-equiv=\"refresh\" content=\"300; http://192.168.0.8/\">");
+          }
+
           client.print("<FORM action=\"http://192.168.0.8/\" >");
           
-          if (!stat){
-            server.print("<a href='?Activate=on'><button style='background-color: #ffffff; border: 2px solid #000000;' type='button'>Ativar alarme</button></a><br/>");
+          if(login){
+            if(leSensor){
+              server.print("<p>Alarme esta ativado</p><br/>");
+              
+            }else{
+              server.print("<p>Alarme esta desativado</p><br/>");
+            }
+            if (!stat){
+              //Se o alarme não foi ativo permite Ativa-lo ou deslogar
+              server.print("<a href='?Activate=on'><button style='background-color: #ffffff; border: 2px solid #000000;' type='button'>Ativar alarme</button></a><br/>");
+              server.print("<a href='?Login=off'><button style='background-color: #ffffff; border: 2px solid #000000;' type='button'>Deslogar</button></a><br/>");
+            }else{
+              //Se o alarme já foi ativado permite Desativa-lo ou deslogar
+              server.print("<a href='?Activate=off'><button style='background-color: #ffffff; border: 2px solid #000000;' type='button'>Desativar alarme</button></a><br/>");
+              server.print("<a href='?Login=off'><button style='background-color: #ffffff; border: 2px solid #000000;' type='button'>Deslogar</button></a><br/>");
+            }
+            //TODO - Acionamento manual da sirene
+            /*server.print("<a href='?Sirene=on'><button style='background-color: #ffffff; border: 2px solid #000000;' type='button'>Ligar Sirene</button></a><br/>");
+            server.print("<a href='?Sirene=off'><button style='background-color: #ffffff; border: 2px solid #000000;' type='button'>Desligar Sirene</button></a><br/>");*/
           }else{
-            server.print("<a href='?Activate=off'><button style='background-color: #ffffff; border: 2px solid #000000;' type='button'>Desativar alarme</button></a><br/>");
-          }
-          /*server.print("<a href='?Sirene=on'><button style='background-color: #ffffff; border: 2px solid #000000;' type='button'>Ligar Sirene</button></a><br/>");
-          server.print("<a href='?Sirene=off'><button style='background-color: #ffffff; border: 2px solid #000000;' type='button'>Desligar Sirene</button></a><br/>");*/
+           //Form com os campos para login na página
+           //ATENÇÃO - NÃO FOI IMPLEMENTADA   N E N H U M A   SEGURANÇA NESTE LOGIN, estou estudando a melhor forma de faze-lo
+           //que mantenha o sistema 100% StandAlone
+           server.print("<form name=\"login\" method=\"get\">");
+           server.print("Usuario: <input type=\"text\" name=\"usu\">");
+           server.print("Senha: <input type=\"text\" name=\"senha\">");
+           server.print("<input type=\"submit\" value=\"Submit\">");
+           server.print("</form>");
+         }
           
           client.println("<br />");
           client.println("</html>");
@@ -113,35 +165,49 @@ boolean LeWebServer(){
         }
         
         if (c == '\n') {
-          // you're starting a new line
-          currentLineIsBlank = true;
+          currentLineIsBlank = true;//inciou uma nova linha
         } 
         else if (c == '\r' ) {
-          // you've gotten a character on the current line
-          if(buffer.indexOf("GET /?Activate=on")>=0 && !stat){
-            //digitalWrite(8,HIGH);  // 5<--- Catch ON status and set LED
-            Serial.println("alarme ativado");
-            digitalWrite(rele,HIGH);
-            delay(200);
-            digitalWrite(rele,LOW);
-            stat = true;
-            ret = false;
-            bkpTempo1 = millis();
+          // Se tiver algum caracter na nova linha
+          //Leituras quando estiver logado
+          if(login){
+            //se o alarme foi ativado
+            if(buffer.indexOf("GET /?Activate=on")>=0 && !stat){
+              Serial.println("alarme ativado");
+              digitalWrite(rele,HIGH);
+              delay(200);
+              digitalWrite(rele,LOW);
+              stat = true;
+              ret = false;
+              bkpTempo1 = millis();
+            }
+            else if(buffer.indexOf("GET /?Activate=off")>=0 && stat){
+              //se o alarme foi desativado
+              Serial.println("alarme desativado");
+              digitalWrite(rele,LOW);
+              delay(200);
+              digitalWrite(rele,HIGH);
+              delay(200);
+              digitalWrite(rele,LOW);
+              delay(200);
+              digitalWrite(rele,HIGH);
+              delay(200);
+              digitalWrite(rele,LOW);
+              stat = false;
+              ret = true;
+              leSensor = true;
+            }
+            else if(buffer.indexOf("GET /?Login=off")>=0 && login){
+              Serial.println("Muda login");
+              login = false;
+            }
+          }else{
+            //verifica se o login esta correto - IMPLEMENTAR SEGURANÇA
+            if(buffer.indexOf("GET /?usu=123&senha=321")>=0 && !login){
+              login = true;
+            }
           }
-          else if(buffer.indexOf("GET /?Activate=off")>=0 && stat){
-            Serial.println("alarme desativado");
-            digitalWrite(rele,LOW);
-            delay(200);
-            digitalWrite(rele,HIGH);
-            delay(200);
-            digitalWrite(rele,LOW);
-            delay(200);
-            digitalWrite(rele,HIGH);
-            delay(200);
-            digitalWrite(rele,LOW);
-            stat = false;
-            ret = true;
-          }
+          //TODO - opção para ativar a sirene manualmente
           /*else if(buffer.indexOf("GET /?Sirene=on")>=0 && control != 3){
             Serial.println("sirene ativada");
             digitalWrite(AtivaSirene, HIGH);
@@ -166,19 +232,23 @@ boolean LeWebServer(){
   return(stat);
 }
 
-//funcao que le o teclado e a ethernet shield
+//-----------------------------------------------------------------------------
+//Função responsável por ler o teclado para ativação/desativação manual
+//-----------------------------------------------------------------------------
 boolean LeTeclado(){
   if (!stat){  
     if(digitalRead(botao1) == HIGH){
+      //da um toque na sirene para confirmar a ativação
       digitalWrite(rele,HIGH);
       delay(200);
       digitalWrite(rele,LOW);
-      stat = true;
+      stat = true;//altera o estado do sistema para aguardar a leitura da RF
       ret = false;
-      bkpTempo1 = millis();
+      bkpTempo1 = millis();//faz o backup do tempo atual para considerar o delay antes de definitivamente ativar o alarme
     }
   }else{
     if(digitalRead(botao2) == HIGH){
+      //da dois toques na sirene para confirmar a desativação
       digitalWrite(rele,LOW);
       delay(200);
       digitalWrite(rele,HIGH);
@@ -188,14 +258,19 @@ boolean LeTeclado(){
       digitalWrite(rele,HIGH);
       delay(200);
       digitalWrite(rele,LOW);
-      stat = false;
+      stat = false;//desativa o sistema altera seu estado para Aguardando Ativação
       ret = true;
+      leSensor = true;
     } 
   }
   return(stat);
 }
 
+//----------------------------------------------------
+//Função responsável pela leitura dos dispositivos RF 
+//----------------------------------------------------
 boolean LeSensor(){
+  leSensor = true;
   byte bytes;
   char myChar;
   if (!ret){ 
@@ -259,6 +334,7 @@ boolean LeSensor(){
       Serial.println(_data,BIN);
       
       //Este código comentado le o código de um sensor
+      //TODO - Criar uma função para automatizar esse recurso
       /*for(int i=0; i<29;i++){
         if (bitRead(_data,i) == _compar1[i]){
           Serial.print(bitRead(_data,i),BIN);
