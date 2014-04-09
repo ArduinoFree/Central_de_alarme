@@ -14,11 +14,10 @@
 int x,startbit,ctr,dataok,t1,larpulso,larpulso1,larpulso2,larpulso3,larpulso4,bt1,bt2,antcode=0;
 unsigned long _data=0; // DATA é o Código recebio do HT6p20 todos os 28 BITS onde, 22 do coodigo+2 dos botões+4 do anti-codigo;
 unsigned long _dur,_dur1; // Duração do Pulso
-unsigned long bkpTempo1; //backup de tempo 1 (depois da ativação)
-unsigned long bkpTempo2; //backup de tempo 2 (depois de lido o sensor)
 byte _pin;    // Pino que vai receber o sinal RF digital.
 byte _compar1[] = {1,0,1,0,1,1,1,1,1,1,1,0,0,1,0,1,0,1,0,1,0,1,0,1,1,0,0,1,0}; //bits de comparação do sensor de porta 1
 byte _compar2[] = {1,0,1,0,1,1,0,1,0,0,1,1,0,0,0,1,1,1,0,1,1,0,0,1,0,1,0,1,0}; //bits de comparação do sensor de porta 2
+byte _compar3[] = {1,0,1,0,1,0,1,0,1,1,1,1,1,1,1,0,1,0,1,1,1,0,0,1,0,1,0,1,0};
 //-----------------------------------
 //variaveis de controle do alarme
 //-----------------------------------
@@ -26,11 +25,21 @@ int numMax = 0;
 int botao1 = 6; //botão para ativação do alarme
 int botao2 = 7; //botão para desativação do alarme
 int rele   = 9; //saida do rele que liga a sirene
+boolean rodaLeitura = true;
 boolean ret = false; //retorno das funções de leitura dos botões e da RF
 boolean stat = false; //variavel de controle de estado 
 //long intervalo1 = 60000;
+//long intervalo1 = 120000;//dalay 1 (depois da ativação)
+//long intervalo2 = 60000;//dalay 2 (depois de lido o sensor)
+//long intervalo3 = 3600000;//dalay 3 (tempo que o alarme tocara)
+
 long intervalo1 = 10000;//dalay 1 (depois da ativação)
-long intervalo2 = 5000;//dalay 2 (depois de lido o sensor)
+long intervalo2 = 10000;//dalay 2 (depois de lido o sensor)
+long intervalo3 = 10000;//dalay 3 (tempo que o alarme tocara)
+
+unsigned long bkpTempo1; //backup de tempo 1 (depois da ativação)
+unsigned long bkpTempo2; //backup de tempo 2 (depois de lido o sensor)
+unsigned long bkpTempo3; //backup de tempo 3 (tempo que o alarme tocara)
 //--------------------
 //Ethernet Shield
 //--------------------
@@ -41,7 +50,7 @@ EthernetClient client;
 boolean login = false;//variavel que define se o cliente está logado
 boolean leSensor = false;
 boolean aguardando = false;//indica que o sistema esta aguardando para ativar o alarme ou tocar a sirene. Tempo de delay
-
+boolean sirene     = false;
 //-----------------------------------------------------
 //Inicialização das portas e algumas variaveis
 //-----------------------------------------------------
@@ -76,19 +85,26 @@ void loop()
   client = server.available();
   LeTeclado();//lê se houve ativação do alarme pelo teclado
   LeWebServer();//ve se houve ativação do alarme pela página
+  if (rodaLeitura){
+    LeSensor(1);//ve se o alarme foi ativado pelo controle sem fio
+  }
   if (stat){//se o status estiver como true, significa que o sistema está no estado 2
+    aguardando = true;
     if(millis()-bkpTempo1 > intervalo1){
+        aguardando = false;
         //-------------------------------------------------
         //Estado 2 - aguardando leitura RF ou desativação
         //-------------------------------------------------
-        if (LeSensor()){//função que faz a leitura da RF
+        rodaLeitura == false;
+        LeSensor(2);
+        if (ret){//função que faz a leitura da RF
           aguardando = true;
           if(millis()-bkpTempo2 > intervalo2){
+            aguardando = false;
             //--------------------------------------------------------------------
             //Estado 3 - Sirene ativada informa ao cliente (TODO) e aguarda desativação
             //--------------------------------------------------------------------
-            aguardando = false;
-            digitalWrite(rele,HIGH);//ativa o rele da sirene
+            AtDesSirene();
           }
         }
     }
@@ -238,42 +254,44 @@ boolean LeWebServer(){
 boolean LeTeclado(){
   if (!stat){  
     if(digitalRead(botao1) == HIGH){
-      //da um toque na sirene para confirmar a ativação
-      digitalWrite(rele,HIGH);
-      delay(200);
-      digitalWrite(rele,LOW);
-      stat = true;//altera o estado do sistema para aguardar a leitura da RF
-      ret = false;
-      bkpTempo1 = millis();//faz o backup do tempo atual para considerar o delay antes de definitivamente ativar o alarme
+      Ativacao();
     }
   }else{
     if(digitalRead(botao2) == HIGH){
-      //da dois toques na sirene para confirmar a desativação
-      digitalWrite(rele,LOW);
-      delay(200);
-      digitalWrite(rele,HIGH);
-      delay(200);
-      digitalWrite(rele,LOW);
-      delay(200);
-      digitalWrite(rele,HIGH);
-      delay(200);
-      digitalWrite(rele,LOW);
-      stat = false;//desativa o sistema altera seu estado para Aguardando Ativação
-      ret = true;
-      leSensor = true;
+      Desativacao();
     } 
   }
   return(stat);
 }
 
+boolean AtDesSirene(){
+  if(!sirene){
+    sirene = true;
+    aguardando = false;
+    digitalWrite(rele,HIGH);//ativa o rele da sirene
+    bkpTempo3 = millis();//faz o backup do tempo atual para considerar o delay antes de desativar a sirene
+  }else{
+    if(sirene && millis()-bkpTempo3 > intervalo3){
+      sirene = false;
+      aguardando = true;
+      digitalWrite(rele,LOW);//ativa o rele da sirene
+      stat = false;//desativa o sistema altera seu estado para Aguardando Ativação
+      ret = true;
+      leSensor = true;
+    }
+  }
+
+ return sirene;
+}
+
 //----------------------------------------------------
 //Função responsável pela leitura dos dispositivos RF 
 //----------------------------------------------------
-boolean LeSensor(){
+boolean LeSensor(int Estado){
   leSensor = true;
   byte bytes;
   char myChar;
-  if (!ret){ 
+  if (!ret || Estado == 1){ 
   digitalWrite(13, digitalRead(_pin)); //Pisca o LED conforme o valor da entrada digital, testar interferencias.
   if (startbit==0)
   {// Testa o tempo piloto até o Bit de inicio;
@@ -347,24 +365,15 @@ boolean LeSensor(){
         }
       }*/
       
-      for(int i=0; i<29;i++){
-        if (bitRead(_data,i) == _compar1[i]){
-          ret = true;
-        }else{
-          ret = false;
-          break;
-        }
+      //faz as comparações para saber qual dispositivo sem fio foi acionado
+      if (Estado == 1){
+        ComparaControle();
+      }else{
+        ComparaSensor();
+        ComparaControle();
       }
-      if(!ret){
-        for(int i=0; i<29;i++){
-          if (bitRead(_data,i) == _compar2[i]){
-            ret = true;
-          }else{
-            ret = false;
-            break;
-          }
-        }
-      }
+      
+      
       if(ret){
         bkpTempo2 = millis();
       }
@@ -376,4 +385,84 @@ boolean LeSensor(){
   } 
   }
   return(ret);
+}
+//----------------------------------------------------------------------------
+// faz as comparações com os códigos de sensores de porta cadastrados
+//----------------------------------------------------------------------------
+void ComparaSensor(){
+  for(int i=0; i<29;i++){
+    if (bitRead(_data,i) == _compar1[i]){
+      ret = true;
+    }else{
+      ret = false;
+      break;
+    }
+  }
+  if(!ret){
+    for(int i=0; i<29;i++){
+      if (bitRead(_data,i) == _compar2[i]){
+        ret = true;
+      }else{
+        ret = false;
+        break;
+      }
+    }
+  }
+}
+
+//----------------------------------------------------------------------------
+// faz as comparações com os códigos do controle de ativação\desativação
+//----------------------------------------------------------------------------
+void ComparaControle(){
+  boolean leituraCompleta = false;
+  for(int i=0; i<29;i++){
+    if (bitRead(_data,i) == _compar3[i]){
+      leituraCompleta = true;
+    }else{
+      leituraCompleta = false;
+      break;
+    }
+  }
+  if(leituraCompleta){
+    if (!stat){
+      Ativacao();
+    }else{
+      Desativacao();
+    }
+  }
+}
+
+//----------------------------------------------------------------------------
+// atualiza as variaveis de estado para ativação do alarme
+//----------------------------------------------------------------------------
+void Ativacao(){
+  //da um toque na sirene para confirmar a ativação
+  digitalWrite(rele,HIGH);
+  delay(200);
+  digitalWrite(rele,LOW);
+  stat = true;//altera o estado do sistema para aguardar a leitura da RF
+  ret = false;
+  bkpTempo1 = millis();//faz o backup do tempo atual para considerar o delay antes de definitivamente ativar o alarme
+}
+
+//----------------------------------------------------------------------------
+// atualiza as variaveis de estado para desativação do alarme
+//----------------------------------------------------------------------------
+void Desativacao(){
+  //da dois toques na sirene para confirmar a desativação
+  digitalWrite(rele,LOW);
+  delay(200);
+  digitalWrite(rele,HIGH);
+  delay(200);
+  digitalWrite(rele,LOW);
+  delay(200);
+  digitalWrite(rele,HIGH);
+  delay(200);
+  digitalWrite(rele,LOW);
+  stat = false;//desativa o sistema altera seu estado para Aguardando Ativação
+  ret = true;
+  leSensor = true;
+  sirene = false;
+  aguardando = false;
+  rodaLeitura == true;//apenas se o alarme estiver desativado faz a leitura do controle novamente, caso contrário a leitura será feita junto com o sensor de porta
 }
